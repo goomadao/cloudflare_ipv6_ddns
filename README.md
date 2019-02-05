@@ -1,2 +1,2 @@
 # openwrt_cloudflare_ipv6_ddns
-A script to update IPv6 addresses of the openwrt router ifself and devices connected to the router using cloudflare v4 api.
+Modify the value of auth email, key, name of zone, names of records and mac addresses and run it periodically.
