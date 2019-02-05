@@ -83,7 +83,7 @@ do
     then
         ip=$(ifconfig | grep $prefix | grep -o '[a-z0-9:]*' | head -3 | tail -1)
     else
-        ip="${prefix%?}$(ip neigh show | grep ${mac_addr[i]} | grep ^fe80 | cut -d ":" -f 3-6 | cut -d " " -f 1)" #$(ip nei show | grep ${mac_addr[i]} | grep ${prefix%?} | head -1 | cut -d " " -f 1)
+        ip="${prefix%?}$(ip neigh show | grep ${mac_addr[i]} | grep ^fe80 | cut -d ":" -f 5-8 | cut -d " " -f 1)" #$(ip nei show | grep ${mac_addr[i]} | grep ${prefix%?} | head -1 | cut -d " " -f 1)
     fi
 
     if [ $ip = "" ]
