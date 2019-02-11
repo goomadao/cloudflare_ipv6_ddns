@@ -11,6 +11,7 @@ mac_addr=("00:00:00:00:00:00" "xx:xx:xx:xx:xx:xx") #00:00:00:00:00:00 stands for
 prefix=$(ubus call network.interface.lan status | grep '"address": "2' | grep -o '[a-f0-9:]*' | tail -1)
 prefix_file="/tmp/cloudflare_ipv6_ddns/prefix.txt"
 id_file="/tmp/cloudflare_ipv6_ddns/cloudflare.ids"
+ip_file="/tmp/cloudflare_ipv6_ddns/ip.txt"
 log_file="/tmp/cloudflare_ipv6_ddns/cloudflare.log"
 
 # LOGGER
@@ -26,7 +27,7 @@ log() {
 [ ! -d "/tmp/cloudflare_ipv6_ddns" ] && mkdir /tmp/cloudflare_ipv6_ddns
 
 
-log "Check Initiated"
+# log "Check Initiated"
 
 
 
@@ -37,12 +38,17 @@ if [ -f $prefix_file ]; then
     old_prefix=$(cat $prefix_file)
     if [ $prefix == $old_prefix ]; then
         echo "Prefix has not changed."
-        exit 0
+        log "Prefix has not changed."
+        # exit 0
+    else
+        log "Prefix changed to: $prefix"
+        echo "Prefix changed to: $prefix"
     fi
+else
+    log "DDNS service starts. Initial prefix: $prefix"
 fi
 
-log "Prefix changed to: $prefix"
-echo "Prefix changed to: $prefix"
+
 
 #make sure to get the zone_id
 echo "Getting zone id..."
@@ -53,17 +59,17 @@ else
     zone_identifier_message=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$zone_name" -H "X-Auth-Email: $auth_email" -H "X-Auth-Key: $auth_key" -H "Content-Type: application/json")
     # echo "zone_identifier_message:$zone_identifier_message
     # "
-    if [[ $zone_identifier_message == *"result\":\[\]"* ]]
+    if [[ "$zone_identifier_message" == *"result\":\[\]"* ]]
     then
         log "No such zone, please check the name of your zone.\n$zone_identifier_message"
         echo -e "No such zone, please check the name of your zone."
         exit 1
-    elif [[ $zone_identifier_message == *"\"success\":false"* ]]
+    elif [[ "$zone_identifier_message" == *"\"success\":false"* ]]
     then
         log "The auth email and key may be wrong, please check again.\n$zone_identifier_message"
         echo -e "the auth email and key may be wrong, please check again."
         exit 1
-    elif [[ $zone_identifier_message != *"\"success\":true"* ]]
+    elif [[ "$zone_identifier_message" != *"\"success\":true"* ]]
     then
         log "Get zone id for $zone_name failed."
         echo -e "Get zone id for $zone_name failed."
@@ -74,19 +80,35 @@ else
     echo "$prefix" > $prefix_file
 fi
 
-flag=0
 
 for ((i=0;i<${#record_name[@]};++i))
 do
+    unset ip
     echo "Changing IP for record: ${record_name[i]}..."
-    if [ ${mac_addr[i]} = "00:00:00:00:00:00" ]
+    if [ "${mac_addr[i]}" = "00:00:00:00:00:00" ]
     then
-        ip=$(ifconfig | grep $prefix | grep -o '[a-z0-9:]*' | head -3 | tail -1)
+        ip=$(ifconfig | grep Global | grep '[a-f0-9:]*' -o | grep '^2' | grep ':' | xargs) #$(ifconfig | grep $prefix | grep -o '[a-z0-9:]*' | head -3 | tail -1)
     else
-        ip="${prefix%?}$(ip neigh show | grep ${mac_addr[i]} | grep ^fe80 | cut -d ":" -f 5-8 | cut -d " " -f 1)" #$(ip nei show | grep ${mac_addr[i]} | grep ${prefix%?} | head -1 | cut -d " " -f 1)
+        prefix_fd92=$(ip neigh show | grep "${mac_addr[i]}" | cut -d " " -f 1 | grep "^fd92")
+        for ((j=1;j<=$(echo "$prefix_fd92" | wc -w);++j))
+        do
+            ip="${ip} ${prefix%?}$(echo $prefix_fd92 | cut -d " " -f $j | cut -d ":" -f 5-8)"
+        done
+        ipv6_addr=$(ip neigh show | grep "${mac_addr[i]}" | cut -d " " -f 1 | grep -v '\.' | grep -v '^f' | grep "${prefix%?}")
+        for ((j=1;j<=$(echo $ipv6_addr | wc -w);++j))
+        do
+            comp=$(echo ${ip[@]} | grep "$(echo $ipv6_addr | cut -d " " -f $j)")
+            if [[ "$comp" == "" ]]
+            then
+                ip="${ip} $(echo $ipv6_addr | cut -d " " -f $j)"
+            fi
+        done
+        ip=$(echo ${ip[@]} | sed 's/ /\n/g' | sort | xargs)
+
+        # ip="${prefix%?}$(ip neigh show | grep ${mac_addr[i]} | grep ^fe80 | cut -d ":" -f 5-8 | cut -d " " -f 1)" #$(ip nei show | grep ${mac_addr[i]} | grep ${prefix%?} | head -1 | cut -d " " -f 1)
     fi
 
-    if [ $ip = "" ]
+    if [ "$ip" = "" ]
     then
         flag=1
         log "Empty ip address for the ${i}th(st,nd) device, please check the mac address:${mac_addr[i]}"
@@ -94,53 +116,95 @@ do
         continue
     fi
 
-    record_identifier_message=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zone_identifier/dns_records?name=${record_name[i]}" -H "X-Auth-Email: $auth_email" -H "X-Auth-Key: $auth_key" -H "Content-Type: application/json")
-    # echo "record_identifier_message:$record_identifier_message
-    # "
-    if [[ $record_identifier_message == *"result\":[]"* ]]; then
-        message="Record ${record_name[i]} does not exists, will establish it"
-        log "$message"
-        update=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${zone_identifier}/dns_records" \
-            -H "X-Auth-Email: $auth_email" \
-            -H "X-Auth-Key: $auth_key" \
-            -H "Content-Type: application/json" \
-            --data "{\"type\":\"AAAA\",\"name\":\"${record_name[i]}\",\"content\":\"$ip\",\"ttl\":120,\"proxied\":false}")
-        if [[ $update != *"success\":true"* ]]
-        then
-            log "Establish record for ${record_name[i]} failed, retrying..."
-            echo -e "Establish record for ${record_name[i]} failed, retrying..."
-            i=$i-1
-        else
-            message="The ip address for the mac address ${mac_addr[i]} has changed to $ip."
-            log "$message"
-            echo -e "$message"
-        fi
-    elif [[ $record_identifier_message == *'"result":[{"id":"'* ]]
+
+    
+
+    if [ ! -f $ip_file ]
     then
-        record_identifier=$(echo $record_identifier_message | grep -o '[a-z0-9]*' | head -3 | tail -1)
-        update=$(curl -s -X PUT "https://api.cloudflare.com/client/v4/zones/$zone_identifier/dns_records/$record_identifier" \
-            -H "X-Auth-Email: $auth_email" \
-            -H "X-Auth-Key: $auth_key" \
-            -H "Content-Type: application/json" \
-            --data "{\"id\":\"$zone_identifier\",\"type\":\"AAAA\",\"name\":\"${record_name[i]}\",\"content\":\"$ip\"}")
-        if [[ $update != *"success\":true"* ]]
-        then
-            log "Modify record for ${record_name[i]} failed, retrying..."
-            echo -e "Modify record for ${record_name[i]} failed, retrying..."
-            i=$i-1
-        else
-            message="The ip address for the mac address ${mac_addr[i]} has changed to $ip."
-            log "$message"
-            echo -e "$message"
-        fi
+        echo "${mac_addr[i]}=$ip" > $ip_file
     else
-        log "Get record id for ${record_name[i]} failed, retrying..."
-        echo -e "Get record id for ${record_name[i]} failed, retrying..."
-        i=$i-1
+        if [ -z "$(cat $ip_file | grep "^${mac_addr[i]}")" ]
+        then
+            echo "${mac_addr[i]}=$ip" >> $ip_file
+        else
+            # 获取旧的IP
+            old_ip=$(cat $ip_file | grep "${mac_addr[i]}" | cut -d "=" -f 2)
+
+            if [[ "$old_ip" == "$ip" ]]
+            then
+                echo "IP for ${mac_addr[i]} has not changed."
+                log "IP for ${mac_addr[i]} has not changed."
+                continue
+            else
+                sed -i "/^${mac_addr[i]}/c${mac_addr[i]}=$ip" $ip_file
+            fi
+        fi
     fi
 
-        
-    # echo -e "$update"
+    while true
+    do
+        deleting_record_id_message=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zone_identifier/dns_records?name=${record_name[i]}" \
+            -H "X-Auth-Email: $auth_email" \
+            -H "X-Auth-Key: $auth_key" \
+            -H "Content-Type: application/json")
+        if [[ "$deleting_record_id_message" != *"success\":true"* ]]
+        then
+            log "Getting deleting record's id for ${record_name[i]} failed, retrying..."
+            echo -e "Getting deleting record's id for ${record_name[i]} failed, retrying..."
+            continue
+        else
+            break
+        fi
+    done
+
+    #delete old records
+    echo "Deleting records for ${record_name[i]}..."
+    deleting_record_id=$(echo $deleting_record_id_message | grep -o '[a-z0-9]*","type' | cut -d '"' -f 1 | xargs)
+    if [ ! -z "$deleting_record_id" ]
+    then
+        deleting_record_id=($deleting_record_id)
+        for ((j=0;j<${#deleting_record_id[@]};++j))
+        do
+            while true
+            do
+                deleting_message=$(curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$zone_identifier/dns_records/${deleting_record_id[j]}" \
+                    -H "X-Auth-Email: $auth_email" \
+                    -H "X-Auth-Key: $auth_key" \
+                    -H "Content-Type: application/json")
+                if [[ "$deleting_message" != *"success\":true"* ]]
+                then
+                    log "Deleting record ${deleting_record_id[j]} for ${record_name[i]} failed, retrying..."
+                    echo -e "Deleting record ${deleting_record_id[j]} for ${record_name[i]} failed, retrying..."
+                    continue
+                else
+                    break
+                fi
+            done
+        done
+    fi
+
+    #create new record
+    echo "Creating records for ${record_name[i]}..."
+    ip=($ip)
+    for ((j=0;j<${#ip[@]};++j))
+    do
+        while true
+        do
+            create_message=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${zone_identifier}/dns_records" \
+                -H "X-Auth-Email: $auth_email" \
+                -H "X-Auth-Key: $auth_key" \
+                -H "Content-Type: application/json" \
+                --data "{\"type\":\"AAAA\",\"name\":\"${record_name[i]}\",\"content\":\"${ip[j]}\",\"ttl\":120,\"proxied\":false}")
+            if [[ "$create_message" != *"success\":true"* ]]
+            then
+                log "Creating record ${record_name[i]} for IP ${ip[j]} failed, retrying..."
+                echo -e "Creating record ${record_name[i]} for IP ${ip[j]} failed, retrying..."
+                continue
+            else
+                break
+            fi
+        done
+    done
 done
 
-exit $flag
+exit 0
