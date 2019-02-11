@@ -46,6 +46,7 @@ do
     then
         log "Prefix can't be empty."
         echo -e "Prefix can't be empty."
+        sleep 3
         continue
     else
         break
