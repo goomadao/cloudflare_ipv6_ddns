@@ -8,7 +8,6 @@ record_name=("1.example.com" "2.example.com") #An array of record name to update
 mac_addr=("00:00:00:00:00:00" "xx:xx:xx:xx:xx:xx") #00:00:00:00:00:00 stands for the router
 
 # MAYBE CHANGE THESE
-prefix=$(ubus call network.interface.lan status | grep '"address": "2' | grep -o '[a-f0-9:]*' | tail -1)
 prefix_file="/tmp/cloudflare_ipv6_ddns/prefix.txt"
 id_file="/tmp/cloudflare_ipv6_ddns/cloudflare.ids"
 ip_file="/tmp/cloudflare_ipv6_ddns/ip.txt"
@@ -27,12 +26,31 @@ log() {
 [ ! -d "/tmp/cloudflare_ipv6_ddns" ] && mkdir /tmp/cloudflare_ipv6_ddns
 
 
-# log "Check Initiated"
+BasePath=$(cd `dirname ${BASH_SOURCE}` ; pwd)
+BaseName=$(basename $BASH_SOURCE)
+ShellPath="$BasePath/$BaseName"
 
+if [ ! -z "$(ps | grep \"$ShellPath\" | grep -v grep)" ]
+then
+    kill -9 "$(ps | grep \"$ShellPath\" | grep -v grep | xargs)"
+    rm -rf $prefix_file $id_file $ip_file $log_file
+fi
 
 
 # check whether the prefix has changed
 echo "Getting prefix..."
+while true
+do
+    prefix=$(ubus call network.interface.lan status | grep '"address": "2' | grep -o '[a-f0-9:]*' | tail -1)
+    if [ -z "$prefix" ]
+    then
+        log "Prefix can't be empty."
+        echo -e "Prefix can't be empty."
+        continue
+    else
+        break
+    fi
+done
 
 if [ -f $prefix_file ]; then
     old_prefix=$(cat $prefix_file)
