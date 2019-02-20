@@ -20,6 +20,25 @@ log() {
     fi
 }
 
+erase_double_colon() 
+{
+    if [ -z "$(echo $1 | grep '::')" ]
+    then
+        echo "$1"
+    else
+        count=$(echo $1 | sed 's/:/ /g' | wc -w)
+        if [ -z "$(echo $1 | grep "^::")" ]
+        then
+            str_0=" "
+        fi
+        for ((i=0;i<8-$count;++i))
+        do
+            str_0="${str_0}0 "
+        done
+        echo "$(echo $1 | sed 's/:/ /g' | sed "s/  /$str_0/" | sed 's/ /:/g')"
+    fi
+}
+
 # SCRIPT START
 
 
@@ -111,12 +130,14 @@ do
         prefix_fd92=$(ip neigh show | grep "${mac_addr[i]}" | cut -d " " -f 1 | grep "^fd92")
         for ((j=1;j<=$(echo "$prefix_fd92" | wc -w);++j))
         do
-            ip="${ip} ${prefix%?}$(echo $prefix_fd92 | cut -d " " -f $j | cut -d ":" -f 5-8)"
+            ip="${ip} ${prefix%?}$(echo `erase_double_colon $(echo $prefix_fd92 | cut -d " " -f $j)` | cut -d ":" -f 5-8)"
+            # ip="${ip} ${prefix%?}$(echo $prefix_fd92 | cut -d " " -f $j | cut -d ":" -f 5-8)"
         done
         ipv6_addr=$(ip neigh show | grep "${mac_addr[i]}" | cut -d " " -f 1 | grep -v '\.' | grep -v '^f' | grep "${prefix%?}")
         for ((j=1;j<=$(echo $ipv6_addr | wc -w);++j))
         do
-            comp=$(echo ${ip[@]} | grep "$(echo $ipv6_addr | cut -d " " -f $j)")
+            # comp=$(echo ${ip[@]} | grep "$(echo $ipv6_addr | cut -d " " -f $j)")
+            cmop=$(echo ${ip[@]} | grep "$(echo `erase_double_colon $(echo $ipv6_addr | cut -d " " -f $j)`)")
             if [[ "$comp" == "" ]]
             then
                 ip="${ip} $(echo $ipv6_addr | cut -d " " -f $j)"
