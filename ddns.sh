@@ -125,7 +125,7 @@ do
     echo "Changing IP for record: ${record_name[i]}..."
     if [ "${mac_addr[i]}" = "00:00:00:00:00:00" ]
     then
-        ip=$(ifconfig | grep Global | grep '[a-f0-9:]*' -o | grep '^2' | grep ':' | xargs) #$(ifconfig | grep $prefix | grep -o '[a-z0-9:]*' | head -3 | tail -1)
+        ip=$(ifconfig | grep Global | grep '[a-f0-9:]*' -o | grep '^2' | grep ':' | sort | xargs) #$(ifconfig | grep $prefix | grep -o '[a-z0-9:]*' | head -3 | tail -1)
     else
         prefix_fd92=$(ip neigh show | grep "${mac_addr[i]}" | cut -d " " -f 1 | grep "^fd92")
         for ((j=1;j<=$(echo "$prefix_fd92" | wc -w);++j))
