@@ -2,12 +2,14 @@
 
 # CHANGE THESE
 auth_email="user@example.com"
-auth_key="xxxxxxxxxx" # found in cloudflare account settings
+# found in cloudflare account settings
+auth_key="xxxxxxxxxx" 
 zone_name="example.com"
 # An array of record name to update, the amount and order must be the same with the mac_addr, but a device may have several record names(for reverse proxy maybe)
 # such as "00:00:00:00:00:00" have 1.example.com, 11.example.com and 111.example.com and "xx:xx:xx:xx:xx:xx" have 2.example.com and 22.example.com
 record_name=("1.example.com 11.example.com 111.example.com" "2.example.com 22.example")
-mac_addr=("00:00:00:00:00:00" "xx:xx:xx:xx:xx:xx") #00:00:00:00:00:00 stands for the router
+#00:00:00:00:00:00 stands for the device itself
+mac_addr=("00:00:00:00:00:00" "xx:xx:xx:xx:xx:xx") 
 
 # MAYBE CHANGE THESE
 prefix_file="/tmp/cloudflare_ipv6_ddns/prefix.txt"
@@ -17,11 +19,13 @@ log_file="/tmp/cloudflare_ipv6_ddns/cloudflare.log"
 
 # LOGGER
 log() {
-    if [ "$1" ]; then
+    if [ "$1" ]
+    then
         echo -e "[$(date)] - $1" >> $log_file
     fi
 }
 
+# get rid of '::' in ipv6 addresses
 erase_double_colon() 
 {
     if [ -z "$(echo $1 | grep '::')" ]
@@ -57,35 +61,41 @@ then
     rm -rf $prefix_file $id_file $ip_file $log_file
 fi
 
+# If there is just one mac_addr and it is all 0(stands for the device itself),
+# then there is no need to get the prefix.
+if [[ ${#mac_addr[@]} != 1 || ${mac_addr[0]} != "00:00:00:00:00:00" ]] 
+then
+    # check whether the prefix has changed
+    echo "Getting prefix..."
+    while true
+    do
+        prefix=$(ubus call network.interface.lan status | grep '"address": "2' | grep -o '[a-f0-9:]*' | tail -1)
+        if [ -z "$prefix" ]
+        then
+            log "Prefix can't be empty."
+            echo -e "Prefix can't be empty."
+            sleep 3
+            continue
+        else
+            break
+        fi
+    done
 
-# check whether the prefix has changed
-echo "Getting prefix..."
-while true
-do
-    prefix=$(ubus call network.interface.lan status | grep '"address": "2' | grep -o '[a-f0-9:]*' | tail -1)
-    if [ -z "$prefix" ]
+    if [ -f $prefix_file ]
     then
-        log "Prefix can't be empty."
-        echo -e "Prefix can't be empty."
-        sleep 3
-        continue
+        old_prefix=$(cat $prefix_file)
+        if [ $prefix == $old_prefix ]
+        then
+            echo "Prefix has not changed."
+            log "Prefix has not changed."
+            # exit 0
+        else
+            log "Prefix changed to: $prefix"
+            echo "Prefix changed to: $prefix"
+        fi
     else
-        break
+        log "DDNS service starts. Initial prefix: $prefix"
     fi
-done
-
-if [ -f $prefix_file ]; then
-    old_prefix=$(cat $prefix_file)
-    if [ $prefix == $old_prefix ]; then
-        echo "Prefix has not changed."
-        log "Prefix has not changed."
-        # exit 0
-    else
-        log "Prefix changed to: $prefix"
-        echo "Prefix changed to: $prefix"
-    fi
-else
-    log "DDNS service starts. Initial prefix: $prefix"
 fi
 
 
@@ -93,7 +103,8 @@ fi
 #make sure to get the zone_id
 echo "Getting zone id..."
 
-if [ -f $id_file ] && [ $(wc -l $id_file | cut -d " " -f 1) == 2 ]; then
+if [ -f $id_file ] && [ $(wc -l $id_file | cut -d " " -f 1) == 2 ]
+then
     zone_identifier=$(head -1 $id_file)
 else
     zone_identifier_message=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$zone_name" -H "X-Auth-Email: $auth_email" -H "X-Auth-Key: $auth_key" -H "Content-Type: application/json")
@@ -119,15 +130,27 @@ else
     echo "$prefix" > $prefix_file
 fi
 
-
+# change all devices' domains' IP addresses
 for ((i=0;i<${#mac_addr[@]};++i))
 do
-    #get IP addresses for the mac_address
+    # get IP addresses for the mac_address
     unset ip
     echo "Changing IP for device: ${mac_addr[i]}..."
     if [ "${mac_addr[i]}" = "00:00:00:00:00:00" ]
     then
-        ip=$(ifconfig | grep Global | grep '[a-f0-9:]*' -o | grep '^2' | grep ':' | xargs) #$(ifconfig | grep $prefix | grep -o '[a-z0-9:]*' | head -3 | tail -1)
+        if type ifconfig > /dev/null 2>&1
+        then
+            ip=$(ifconfig | grep -i global | grep '[a-f0-9:]*' -o | grep '^2' | grep ':' | xargs)
+        else
+            if type ip > /dev/null 2>&1
+            then
+                ip=$(ip address | grep inet6 | grep -i global | sed 's/^ *//g' | cut -d " " -f 2 | cut -d '/' -f 1 | grep ^2 | xargs)
+            else
+                echo -e "Can't get IP address, please make sure that ip or ifconfig command works on your device."
+                log "Can't get IP address, please make sure that ip or ifconfig command works on your device."
+                continue;
+            fi
+        fi
     else
         prefix_fd92=$(ip neigh show | grep "${mac_addr[i]}" | cut -d " " -f 1 | grep "^fd92")
         for ((j=1;j<=$(echo "$prefix_fd92" | wc -w);++j))
@@ -166,7 +189,7 @@ do
         then
             echo "${mac_addr[i]}=$ip" >> $ip_file
         else
-            # 获取旧的IP
+            # get old IP addresses and compare with the new ones
             old_ip=$(cat $ip_file | grep "${mac_addr[i]}" | cut -d "=" -f 2)
 
             if [[ "$old_ip" == "$ip" ]]
@@ -179,7 +202,9 @@ do
             fi
         fi
     fi
-    ip=($ip) #change IP into an array
+
+    #change IP into an array
+    ip=($ip) 
 
     record_names=(${record_name[i]})
     for ((ii=0;ii<${#record_names[@]};++ii))
@@ -228,6 +253,7 @@ do
                 done
             done
         fi
+        
 
         #create new record
         echo "Creating records for ${record_names[ii]}..."
