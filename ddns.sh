@@ -4,7 +4,9 @@
 auth_email="user@example.com"
 auth_key="xxxxxxxxxx" # found in cloudflare account settings
 zone_name="example.com"
-record_name=("1.example.com" "2.example.com") #An array of record name to update, the amount and order must be the same with the mac_addr
+# An array of record name to update, the amount and order must be the same with the mac_addr, but a device may have several record names(for reverse proxy maybe)
+# such as "00:00:00:00:00:00" have 1.example.com, 11.example.com and 111.example.com and "xx:xx:xx:xx:xx:xx" have 2.example.com and 22.example.com
+record_name=("1.example.com 11.example.com 111.example.com" "2.example.com 22.example")
 mac_addr=("00:00:00:00:00:00" "xx:xx:xx:xx:xx:xx") #00:00:00:00:00:00 stands for the router
 
 # MAYBE CHANGE THESE
@@ -95,8 +97,7 @@ if [ -f $id_file ] && [ $(wc -l $id_file | cut -d " " -f 1) == 2 ]; then
     zone_identifier=$(head -1 $id_file)
 else
     zone_identifier_message=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones?name=$zone_name" -H "X-Auth-Email: $auth_email" -H "X-Auth-Key: $auth_key" -H "Content-Type: application/json")
-    # echo "zone_identifier_message:$zone_identifier_message
-    # "
+    # echo "zone_identifier_message:$zone_identifier_message"
     if [[ "$zone_identifier_message" == *"result\":\[\]"* ]]
     then
         log "No such zone, please check the name of your zone.\n$zone_identifier_message"
@@ -119,13 +120,14 @@ else
 fi
 
 
-for ((i=0;i<${#record_name[@]};++i))
+for ((i=0;i<${#mac_addr[@]};++i))
 do
+    #get IP addresses for the mac_address
     unset ip
-    echo "Changing IP for record: ${record_name[i]}..."
+    echo "Changing IP for device: ${mac_addr[i]}..."
     if [ "${mac_addr[i]}" = "00:00:00:00:00:00" ]
     then
-        ip=$(ifconfig | grep Global | grep '[a-f0-9:]*' -o | grep '^2' | grep ':' | sort | xargs) #$(ifconfig | grep $prefix | grep -o '[a-z0-9:]*' | head -3 | tail -1)
+        ip=$(ifconfig | grep Global | grep '[a-f0-9:]*' -o | grep '^2' | grep ':' | xargs) #$(ifconfig | grep $prefix | grep -o '[a-z0-9:]*' | head -3 | tail -1)
     else
         prefix_fd92=$(ip neigh show | grep "${mac_addr[i]}" | cut -d " " -f 1 | grep "^fd92")
         for ((j=1;j<=$(echo "$prefix_fd92" | wc -w);++j))
@@ -156,9 +158,6 @@ do
         continue
     fi
 
-
-    
-
     if [ ! -f $ip_file ]
     then
         echo "${mac_addr[i]}=$ip" > $ip_file
@@ -180,69 +179,76 @@ do
             fi
         fi
     fi
+    ip=($ip) #change IP into an array
 
-    while true
+    record_names=(${record_name[i]})
+    for ((ii=0;ii<${#record_names[@]};++ii))
     do
-        deleting_record_id_message=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zone_identifier/dns_records?name=${record_name[i]}" \
-            -H "X-Auth-Email: $auth_email" \
-            -H "X-Auth-Key: $auth_key" \
-            -H "Content-Type: application/json")
-        if [[ "$deleting_record_id_message" != *"success\":true"* ]]
-        then
-            log "Getting deleting record's id for ${record_name[i]} failed, retrying..."
-            echo -e "Getting deleting record's id for ${record_name[i]} failed, retrying..."
-            continue
-        else
-            break
-        fi
-    done
+        #get old records' id
+        while true
+        do
+            deleting_record_id_message=$(curl -s -X GET "https://api.cloudflare.com/client/v4/zones/$zone_identifier/dns_records?name=${record_names[ii]}" \
+                -H "X-Auth-Email: $auth_email" \
+                -H "X-Auth-Key: $auth_key" \
+                -H "Content-Type: application/json")
+            if [[ "$deleting_record_id_message" != *"success\":true"* ]]
+            then
+                log "Getting deleting record's id for ${record_names[ii]} failed, retrying..."
+                echo -e "Getting deleting record's id for ${record_names[ii]} failed, retrying..."
+                continue
+            else
+                break
+            fi
+        done
 
-    #delete old records
-    echo "Deleting records for ${record_name[i]}..."
-    deleting_record_id=$(echo $deleting_record_id_message | grep -o '[a-z0-9]*","type' | cut -d '"' -f 1 | xargs)
-    if [ ! -z "$deleting_record_id" ]
-    then
-        deleting_record_id=($deleting_record_id)
-        for ((j=0;j<${#deleting_record_id[@]};++j))
+        
+
+        #delete old records
+        echo "Deleting records for ${record_names[ii]}..."
+        deleting_record_id=$(echo $deleting_record_id_message | grep -o '[a-z0-9]*","type' | cut -d '"' -f 1 | xargs)
+        if [ ! -z "$deleting_record_id" ]
+        then
+            deleting_record_id=($deleting_record_id)
+            for ((j=0;j<${#deleting_record_id[@]};++j))
+            do
+                while true
+                do
+                    deleting_message=$(curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$zone_identifier/dns_records/${deleting_record_id[j]}" \
+                        -H "X-Auth-Email: $auth_email" \
+                        -H "X-Auth-Key: $auth_key" \
+                        -H "Content-Type: application/json")
+                    if [[ "$deleting_message" != *"success\":true"* ]]
+                    then
+                        log "Deleting record ${deleting_record_id[j]} for ${record_names[ii]} failed, retrying..."
+                        echo -e "Deleting record ${deleting_record_id[j]} for ${record_names[ii]} failed, retrying..."
+                        continue
+                    else
+                        break
+                    fi
+                done
+            done
+        fi
+
+        #create new record
+        echo "Creating records for ${record_names[ii]}..."
+        for ((j=0;j<${#ip[@]};++j))
         do
             while true
             do
-                deleting_message=$(curl -s -X DELETE "https://api.cloudflare.com/client/v4/zones/$zone_identifier/dns_records/${deleting_record_id[j]}" \
+                create_message=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${zone_identifier}/dns_records" \
                     -H "X-Auth-Email: $auth_email" \
                     -H "X-Auth-Key: $auth_key" \
-                    -H "Content-Type: application/json")
-                if [[ "$deleting_message" != *"success\":true"* ]]
+                    -H "Content-Type: application/json" \
+                    --data "{\"type\":\"AAAA\",\"name\":\"${record_names[ii]}\",\"content\":\"${ip[j]}\",\"ttl\":120,\"proxied\":false}")
+                if [[ "$create_message" != *"success\":true"* ]]
                 then
-                    log "Deleting record ${deleting_record_id[j]} for ${record_name[i]} failed, retrying..."
-                    echo -e "Deleting record ${deleting_record_id[j]} for ${record_name[i]} failed, retrying..."
+                    log "Creating record ${record_names[ii]} for IP ${ip[j]} failed, retrying..."
+                    echo -e "Creating record ${record_names[ii]} for IP ${ip[j]} failed, retrying..."
                     continue
                 else
                     break
                 fi
             done
-        done
-    fi
-
-    #create new record
-    echo "Creating records for ${record_name[i]}..."
-    ip=($ip)
-    for ((j=0;j<${#ip[@]};++j))
-    do
-        while true
-        do
-            create_message=$(curl -s -X POST "https://api.cloudflare.com/client/v4/zones/${zone_identifier}/dns_records" \
-                -H "X-Auth-Email: $auth_email" \
-                -H "X-Auth-Key: $auth_key" \
-                -H "Content-Type: application/json" \
-                --data "{\"type\":\"AAAA\",\"name\":\"${record_name[i]}\",\"content\":\"${ip[j]}\",\"ttl\":120,\"proxied\":false}")
-            if [[ "$create_message" != *"success\":true"* ]]
-            then
-                log "Creating record ${record_name[i]} for IP ${ip[j]} failed, retrying..."
-                echo -e "Creating record ${record_name[i]} for IP ${ip[j]} failed, retrying..."
-                continue
-            else
-                break
-            fi
         done
     done
 done
